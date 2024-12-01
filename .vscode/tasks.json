@@ -1,0 +1,72 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "docker: compose up@gpu-online",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}/docker/up@gpu-online/"
+            },
+            "command": "docker compose -p nsfw_detector up"
+        },
+        {
+            "label": "docker: compose up@cpu-online",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}/docker/up@cpu-online/"
+            },
+            "command": "docker compose -p nsfw_detector up"
+        },
+        {
+            "label": "docker: build main",
+            "type": "shell",
+            "command": "docker build -t vxlink/nsfw_detector:main -f ./docker/build@source/dockerfile ."
+        },
+        // no pypi package
+        // {
+        //     "label": "docker: build v1.7",
+        //     "type": "shell",
+        //     "command": "docker build -t vxlink/nsfw_detector:v1.7 -f ./docker/build@pypi/dockerfile ."
+        // },
+        {
+            "label": "huggingface-cli: download models",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "HF_ENDPOINT": "https://hf-mirror.com",
+                    "HF_HUB_ETAG_TIMEOUT": "1000",
+                    "HF_HUB_DOWNLOAD_TIMEOUT": "1000"
+                }
+            },
+            "command": [
+                "huggingface-cli download --revision main --cache-dir ./cache/huggingface/hub --include='*.json' Falconsai/nsfw_image_detection",
+                "&& huggingface-cli download --revision main --cache-dir ./cache/huggingface/hub --include='*.safetensors' Falconsai/nsfw_image_detection",
+            ]
+        },
+        {
+            "label": "conda: run app",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "HF_ENDPOINT": "https://hf-mirror.com",
+                    "HF_HUB_ETAG_TIMEOUT": "1000",
+                    "HF_HUB_DOWNLOAD_TIMEOUT": "1000",
+                    "TRANSFORMERS_CACHE": "${workspaceFolder}/cache/huggingface/hub",
+                }
+            },
+            "command": [
+                "conda run --no-capture-output -n nsfw_detector python app.py"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "conda: create env",
+            "type": "shell",
+            "command": [
+                "conda env create -f ./environment.yml"
+            ]
+        }
+    ]
+}
