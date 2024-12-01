@@ -1,0 +1,90 @@
+
+name: Docker Image Build/Publish tag with version
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - 'main'
+    paths:
+      - docker/build@pypi/dockerfile
+      - .github/workflows/docker-image-tag-version.yml
+  workflow_dispatch:
+    inputs:
+      nsfwdetector_version:
+        description: nsfw-detector version of pypi
+        required: true
+        default: '1.7'
+
+jobs:
+  build-and-push-docker-image:
+    name: Build Docker image and push to repositories
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    strategy:
+      matrix:
+        NSFWDETECTOR_VERSION:
+          - ${{ github.event.inputs.nsfwdetector_version || '1.7' }}
+        platform:
+          - linux/amd64
+
+    steps:
+      # Fix github action 'No space left on device'
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Meta data image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/nsfw_detector
+            ghcr.io/${{ github.repository_owner }}/nsfw_detector
+          tags: |
+            type=raw,value=${{ matrix.NSFWDETECTOR_VERSION }}
+            type=raw,value=lastet
+          flavor: |
+            latest=false
+
+      - name: Build push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/build@pypi/dockerfile
+          build-args: |
+            NSFWDETECTOR_VERSION=${{ matrix.NSFWDETECTOR_VERSION }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Print image digest
+        run: echo ${{ steps.build.outputs.digest }}

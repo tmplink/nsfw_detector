@@ -1,0 +1,11 @@
+.git/
+.github/
+.vscode/
+cache/
+docker/
+.gitignore
+build.sh
+dockerfile
+environment.yml
+# Ignore generated files
+**/*.pyc
