@@ -4,12 +4,18 @@ import tempfile
 import os
 import shutil
 import logging
-import magic
 from pathlib import Path
 from werkzeug.utils import secure_filename
 from config import MAX_FILE_SIZE, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MIME_TO_EXT
 from utils import ArchiveHandler, can_process_file, sort_files_by_priority
 from processors import process_image, process_pdf_file, process_video_file, process_archive
+
+import platform
+
+if platform.system() == "Windows":
+    from winmagic import magic
+else:
+    import magic
 
 # 配置日志
 logger = logging.getLogger(__name__)

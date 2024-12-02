@@ -1,0 +1,14 @@
+name: nsfw_detector
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10.12
+
+  - pytorch==2.4.1
+  - pytorch-cuda==12.4
+
+  - pip:
+    - python-magic-win64==0.4.13
+    - -r requirements.txt

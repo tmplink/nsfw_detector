@@ -1,4 +1,5 @@
 # processors.py
+import torch
 from transformers import pipeline
 import subprocess
 import numpy as np
@@ -21,8 +22,12 @@ from config import (
 # 配置日志
 logger = logging.getLogger(__name__)
 
+# GPU加速
+device = 'cuda' if torch.cuda.is_available() else -1
+logger.info(f"处理设备: device={device}")
+
 # 初始化模型
-pipe = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=-1)
+pipe = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=device)
 
 class VideoProcessor:
     def __init__(self, video_path):

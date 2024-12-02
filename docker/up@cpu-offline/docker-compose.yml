@@ -1,0 +1,13 @@
+
+
+services:
+  nsfw_detector:
+    image: vxlink/nsfw_detector:1.0.0
+    container_name: nsfw_detector_flask
+    environment:
+      - TORCH_DEVICE=cpu
+      - HF_HUB_OFFLINE=true
+    ports:
+      - "3333:3333"
+    volumes:
+      - ./../../cache:/root/.cache

@@ -1,0 +1,30 @@
+# ARG NSFWDETECTOR_VERSION=1.7
+
+
+# FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+
+# ARG NSFWDETECTOR_VERSION
+
+# WORKDIR /app
+
+# RUN apt-get update && apt-get install -y \
+#     python3-pip \
+#     libgl1-mesa-glx \
+#     libsm6 \
+#     libxext6 \
+#     libglib2.0-0 \
+#     libxrender-dev \
+#     libmagic1 \
+#     ffmpeg \
+#     p7zip-full p7zip-rar \
+#     && rm -rf /var/lib/apt/lists/*
+
+# RUN pip3 install --upgrade pip
+
+# RUN pip3 install --no-cache-dir nsfw-detector?==${NSFWDETECTOR_VERSION}
+
+# EXPOSE 3333
+
+# VOLUME /root/.cache
+
+# CMD ["python", "app.py"]
