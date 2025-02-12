@@ -78,7 +78,7 @@ Write-Host "- Version: $Version"
 Write-Host "- Push to registry: $Push"
 Write-Host "- Native platform: $NativePlatform"
 Write-Host "- Target platforms: $Platform"
-Write-Host "- Cache enabled: $(if ($CacheFrom -eq "") { 'yes' } else { 'no' })"
+Write-Host "- Cache enabled: $(if ($CacheFrom -eq '') { 'yes' } else { 'no' })"
 
 # 创建缓存目录
 if (-not (Test-Path $CacheDir)) {
