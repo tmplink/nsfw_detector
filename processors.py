@@ -3,13 +3,13 @@ from transformers import pipeline
 import subprocess
 import numpy as np
 from PIL import Image
-import fitz
 import io
 import logging
 import tempfile
 import os
 import shutil
 import glob
+from pdf2image import convert_from_path
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import ArchiveHandler, can_process_file, sort_files_by_priority
@@ -269,43 +269,54 @@ def process_image(image):
         raise Exception(f"Image processing failed: {str(e)}")
 
 def process_pdf_file(pdf_stream):
-    """处理PDF文件并检查内容"""
+    """使用 pdf2image 处理 PDF 文件并检查内容"""
     try:
         logger.info("开始处理PDF文件")
-        doc = fitz.open(stream=pdf_stream, filetype="pdf")
-        total_pages = len(doc)
-        logger.info(f"PDF共有 {total_pages} 页")
         
-        last_result = None  # 保存最后一次处理结果
-        
-        for page_num in range(total_pages):
-            logger.info(f"正在处理第 {page_num + 1} 页")
-            page = doc[page_num]
-            image_list = page.get_images()
+        # 创建临时文件保存 PDF 内容
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
+            tmp_pdf.write(pdf_stream)
+            tmp_pdf_path = tmp_pdf.name
+
+        try:
+            # 使用 pdf2image 将 PDF 转换为图片
+            from pdf2image import convert_from_path
+            images = convert_from_path(
+                tmp_pdf_path,
+                dpi=200,  # 设置较低的DPI以提高性能
+                fmt='jpeg',
+                thread_count=2  # 使用多线程提高性能
+            )
             
-            if len(image_list) > 0:
-                logger.info(f"第 {page_num + 1} 页发现 {len(image_list)} 张图片")
+            logger.info(f"PDF共转换出 {len(images)} 页图片")
             
-            for img_index, img in enumerate(image_list):
+            last_result = None
+            
+            # 处理每一页转换出的图片
+            for page_num, image in enumerate(images, 1):
                 try:
-                    xref = img[0]
-                    base_image = doc.extract_image(xref)
-                    image_bytes = base_image["image"]
-                    
-                    image = Image.open(io.BytesIO(image_bytes))
+                    logger.info(f"正在处理第 {page_num} 页")
                     result = process_image(image)
-                    last_result = result  # 保存每次的处理结果
+                    last_result = result
                     
                     if result['nsfw'] > NSFW_THRESHOLD:
-                        logger.info(f"在第 {page_num + 1} 页发现匹配内容")
+                        logger.info(f"在第 {page_num} 页发现匹配内容")
                         return result
-
+                        
                 except Exception as e:
-                    logger.error(f"处理PDF中的图片失败: {str(e)}")
+                    logger.error(f"处理PDF第 {page_num} 页时出错: {str(e)}")
                     continue
-        
-        logger.info("PDF处理完成，返回最后一次处理结果")
-        return last_result  # 返回最后一次处理结果，如果没有处理过任何图片则为None
+            
+            logger.info("PDF处理完成")
+            return last_result  # 返回最后一次处理结果
+            
+        finally:
+            # 清理临时PDF文件
+            try:
+                os.unlink(tmp_pdf_path)
+            except Exception as e:
+                logger.error(f"清理临时PDF文件失败: {str(e)}")
+                
     except Exception as e:
         logger.error(f"PDF处理失败: {str(e)}")
         raise Exception(f"PDF processing failed: {str(e)}")

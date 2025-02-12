@@ -5,34 +5,34 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 系统依赖安装放在最前面，因为这些很少改变
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    curl \
-    unrar \
-    p7zip-full p7zip-rar \
-    python3-opencv \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libmagic1 \
-    libxext6 \
-    libxrender-dev \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update
+RUN apt-get install -y python3
+RUN apt-get install -y python3-pip
+RUN apt-get install -y curl
+RUN apt-get install -y unrar
+RUN apt-get install -y p7zip-full
+RUN apt-get install -y p7zip-rar
+RUN apt-get install -y python3-opencv
+RUN apt-get install -y libgl1-mesa-glx
+RUN apt-get install -y libglib2.0-0
+RUN apt-get install -y libsm6
+RUN apt-get install -y libmagic1
+RUN apt-get install -y libxext6
+RUN apt-get install -y libxrender-dev
+RUN apt-get install -y ffmpeg
+RUN apt-get install -y poppler-utils
 
-# 合并 pip 安装命令，减少层数
-RUN pip3 install --no-cache-dir \
-    python-magic \
-    opencv-python-headless \
-    rarfile \
-    py7zr \
-    flask==2.0.1 \
-    werkzeug==2.0.3 \
-    Pillow \
-    transformers \
-    PyMuPDF \
-    && pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# 分解成多步执行 pip 安装
+RUN pip3 install --no-cache-dir python-magic
+RUN pip3 install --no-cache-dir opencv-python-headless
+RUN pip3 install --no-cache-dir rarfile
+RUN pip3 install --no-cache-dir py7zr
+RUN pip3 install --no-cache-dir flask==2.0.1
+RUN pip3 install --no-cache-dir werkzeug==2.0.3
+RUN pip3 install --no-cache-dir Pillow
+RUN pip3 install --no-cache-dir transformers
+RUN pip3 install --no-cache-dir pdf2image
+RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 # 预下载模型
 RUN python3 -c "from transformers import pipeline; pipe = pipeline('image-classification', model='Falconsai/nsfw_image_detection', device=-1)"
