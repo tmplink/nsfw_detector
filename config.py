@@ -68,6 +68,9 @@ rarfile.PATH_SEP = '/'
 os.environ['HF_HOME'] = '/root/.cache/huggingface'
 
 # MIME类型到文件扩展名的映射
+# config.py 中的 MIME_TO_EXT 字典应该这样修改：
+
+# MIME类型到文件扩展名的映射
 MIME_TO_EXT = {
     # 图片格式
     'image/jpeg': '.jpg',
@@ -93,6 +96,10 @@ MIME_TO_EXT = {
     
     # PDF格式
     'application/pdf': '.pdf',
+    
+    # 文档格式 (新增)
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
     
     # 视频和容器格式
     'video/mp4': '.mp4',
@@ -147,6 +154,15 @@ VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.webm', '.ts', '.fl
 ARCHIVE_EXTENSIONS = {'.7z', '.rar', '.zip', '.gz', '.tar', '.bz2', '.xz', 
                      '.lzma', '.zst', '.cab'}
 
+# 添加新的文档扩展名集合
+DOCUMENT_EXTENSIONS = {'.doc', '.docx'}
+
+# 添加新的 MIME 类型集合
+DOCUMENT_MIME_TYPES = {
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+}
+
 # MIME 类型集合
 IMAGE_MIME_TYPES = {mime for mime, ext in MIME_TO_EXT.items() if mime.startswith('image/')}
 VIDEO_MIME_TYPES = {mime for mime, ext in MIME_TO_EXT.items() if mime.startswith('video/')}
@@ -157,7 +173,7 @@ ARCHIVE_MIME_TYPES = {mime for mime, ext in MIME_TO_EXT.items() if
 PDF_MIME_TYPES = {'application/pdf'}
 
 # 所有支持的 MIME 类型集合
-SUPPORTED_MIME_TYPES = IMAGE_MIME_TYPES | VIDEO_MIME_TYPES | ARCHIVE_MIME_TYPES | PDF_MIME_TYPES
+SUPPORTED_MIME_TYPES = IMAGE_MIME_TYPES | VIDEO_MIME_TYPES | ARCHIVE_MIME_TYPES | PDF_MIME_TYPES | DOCUMENT_MIME_TYPES
 
 # 默认配置值
 MAX_FILE_SIZE = 20 * 1024 * 1024 * 1024  # 20GB
@@ -176,7 +192,9 @@ globals().update(file_config)
 # 导出所有配置变量
 __all__ = [
     'MIME_TO_EXT', 'IMAGE_EXTENSIONS', 'VIDEO_EXTENSIONS', 'ARCHIVE_EXTENSIONS',
+    'DOCUMENT_EXTENSIONS',  # 新增
     'IMAGE_MIME_TYPES', 'VIDEO_MIME_TYPES', 'ARCHIVE_MIME_TYPES', 'PDF_MIME_TYPES',
+    'DOCUMENT_MIME_TYPES',  # 新增
     'SUPPORTED_MIME_TYPES', 'MAX_FILE_SIZE', 'NSFW_THRESHOLD', 'FFMPEG_MAX_FRAMES', 
     'FFMPEG_TIMEOUT', 'CHECK_ALL_FILES', 'MAX_INTERVAL_SECONDS'
 ]

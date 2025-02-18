@@ -7,9 +7,12 @@ import logging
 import magic
 from pathlib import Path
 from werkzeug.utils import secure_filename
-from config import MAX_FILE_SIZE, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MIME_TO_EXT
+from config import MAX_FILE_SIZE, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MIME_TO_EXT, DOCUMENT_EXTENSIONS
 from utils import ArchiveHandler, can_process_file, sort_files_by_priority
-from processors import process_image, process_pdf_file, process_video_file, process_archive
+from processors import (
+    process_image, process_pdf_file, process_video_file, 
+    process_archive, process_doc_file, process_docx_file  # 添加这两个函数的导入
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -68,6 +71,7 @@ def detect_file_type(file_path):
         logger.error(f"文件类型检测失败: {str(e)}")
         raise
 
+# 在 app.py 文件中，找到 process_file_by_type 函数，修改如下：
 def process_file_by_type(file_path, detected_type, original_filename, temp_handler):
     """根据文件类型选择处理方法"""
     mime_type, ext = detected_type
@@ -76,7 +80,8 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
     if original_filename and '.' in original_filename:
         original_ext = os.path.splitext(original_filename)[1].lower()
         if original_ext in IMAGE_EXTENSIONS or original_ext == '.pdf' or \
-           original_ext in VIDEO_EXTENSIONS or original_ext in {'.rar', '.zip', '.7z', '.gz'}:
+           original_ext in VIDEO_EXTENSIONS or original_ext in {'.rar', '.zip', '.7z', '.gz'} or \
+           original_ext in DOCUMENT_EXTENSIONS:  # 新增文档扩展名支持
             ext = original_ext
     
     if not ext:
@@ -129,6 +134,25 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
         elif ext in {'.zip', '.rar', '.7z', '.gz'}:
             return process_archive(file_path, original_filename)
             
+        elif ext in DOCUMENT_EXTENSIONS:  # 新增对文档文件的处理
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+                if ext == '.doc':
+                    result = process_doc_file(file_content)
+                else:  # .docx
+                    result = process_docx_file(file_content)
+                    
+                if result:
+                    return {
+                        'status': 'success',
+                        'filename': original_filename,
+                        'result': result
+                    }
+                return {
+                    'status': 'error',
+                    'message': 'No processable content found in document'
+                }, 400
+            
         else:
             logger.error(f"不支持的文件扩展名: {ext}")
             return {
@@ -142,7 +166,7 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
             'status': 'error',
             'message': str(e)
         }, 500
-
+    
 @app.route('/')
 def index():
     """Serve the index.html file"""
