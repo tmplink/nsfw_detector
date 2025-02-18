@@ -4,6 +4,7 @@ import subprocess
 import numpy as np
 from PIL import Image
 import io
+from docx import Document
 import logging
 import tempfile
 import os
@@ -320,6 +321,95 @@ def process_pdf_file(pdf_stream):
     except Exception as e:
         logger.error(f"PDF处理失败: {str(e)}")
         raise Exception(f"PDF processing failed: {str(e)}")
+    
+def process_doc_file(file_content):
+    """处理 .doc 文件"""
+    try:
+        # 创建临时文件来存储 .doc 内容
+        with tempfile.NamedTemporaryFile(suffix='.doc', delete=False) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+
+        try:
+            # 使用 antiword 将 .doc 转换为文本
+            result = subprocess.run(
+                ['antiword', '-i', '1', tmp_file_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300
+            )
+
+            # 检查是否包含图片（使用 antiword 的图片提取模式）
+            img_dir = tempfile.mkdtemp()
+            subprocess.run(
+                ['antiword', '-i', '2', '-o', img_dir, tmp_file_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300
+            )
+
+            # 检查提取的图片
+            last_result = None
+            for img_file in os.listdir(img_dir):
+                if img_file.endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(img_dir, img_file)
+                    with Image.open(img_path) as img:
+                        result = process_image(img)
+                        last_result = result
+                        if result['nsfw'] > NSFW_THRESHOLD:
+                            return result
+
+            return last_result
+
+        finally:
+            # 清理临时文件
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+            if os.path.exists(img_dir):
+                import shutil
+                shutil.rmtree(img_dir)
+
+    except Exception as e:
+        logger.error(f"处理 DOC 文件失败: {str(e)}")
+        raise Exception(f"DOC processing failed: {str(e)}")
+
+def process_docx_file(file_content):
+    """处理 .docx 文件"""
+    try:
+        # 创建临时文件来存储 .docx 内容
+        with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+
+        try:
+            # 使用 python-docx 加载文档
+            doc = Document(tmp_file_path)
+            
+            # 提取和处理所有图片
+            last_result = None
+            for rel in doc.part.rels.values():
+                if "image" in rel.target_ref:
+                    try:
+                        image_data = rel.target_part.blob
+                        img = Image.open(io.BytesIO(image_data))
+                        result = process_image(img)
+                        last_result = result
+                        if result['nsfw'] > NSFW_THRESHOLD:
+                            return result
+                    except Exception as img_error:
+                        logger.error(f"处理 DOCX 中的图片失败: {str(img_error)}")
+                        continue
+
+            return last_result
+
+        finally:
+            # 清理临时文件
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+
+    except Exception as e:
+        logger.error(f"处理 DOCX 文件失败: {str(e)}")
+        raise Exception(f"DOCX processing failed: {str(e)}")
 
 def process_video_file(video_path):
     """处理视频文件的入口函数"""

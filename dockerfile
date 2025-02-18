@@ -1,4 +1,4 @@
-FROM --platform=$TARGETPLATFORM debian:stable-slim
+FROM debian:stable-slim
 
 WORKDIR /app
 
@@ -39,6 +39,9 @@ RUN apt-get install -y libxrender-dev
 RUN apt-get install -y python3-magic
 RUN apt-get install -y libmagic1
 
+# 文档解析工具
+RUN apt-get install -y antiword
+
 # 创建并激活虚拟环境
 RUN python3 -m venv /venv
 ENV PATH="/venv/bin:$PATH"
@@ -52,7 +55,9 @@ RUN pip3 install --no-cache-dir werkzeug==2.0.3
 RUN pip3 install --no-cache-dir Pillow
 RUN pip3 install --no-cache-dir transformers
 RUN pip3 install --no-cache-dir pdf2image
+RUN pip3 install --no-cache-dir python-docx
 RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip3 install --no-cache-dir python-magic
 
 # 预下载模型
 RUN python3 -c "from transformers import pipeline; pipe = pipeline('image-classification', model='Falconsai/nsfw_image_detection', device=-1)"

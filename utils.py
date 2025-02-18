@@ -9,7 +9,10 @@ import subprocess
 import shutil
 import uuid
 from pathlib import Path
-from config import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from config import (
+    IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, DOCUMENT_EXTENSIONS,  # 添加 DOCUMENT_EXTENSIONS
+    ARCHIVE_EXTENSIONS
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +244,10 @@ def get_file_extension(filename):
 
 def can_process_file(filename):
     ext = get_file_extension(filename)
-    return ext in IMAGE_EXTENSIONS or ext == '.pdf' or ext in VIDEO_EXTENSIONS
+    return (ext in IMAGE_EXTENSIONS or 
+            ext == '.pdf' or 
+            ext in VIDEO_EXTENSIONS or
+            ext in DOCUMENT_EXTENSIONS) 
 
 def sort_files_by_priority(handler, files):
     def get_priority_and_size(filename):
@@ -254,6 +260,8 @@ def sort_files_by_priority(handler, files):
             priority = 1
         elif ext in VIDEO_EXTENSIONS:
             priority = 2
+        elif ext in DOCUMENT_EXTENSIONS:  # 添加文档文件的优先级
+            priority = 1  # 与 PDF 相同的优先级
         else:
             priority = 3
             
