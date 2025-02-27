@@ -32,6 +32,7 @@ This detector supports checking the following file types:
 * ✅ PDF files (supported)
 * ✅ Videos (supported)
 * ✅ Files in compressed packages (supported)
+* ✅ Doc,Docx (supported)
 
 ## Quick Start
 
