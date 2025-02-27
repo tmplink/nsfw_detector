@@ -10,13 +10,14 @@ import tempfile
 import os
 import shutil
 import glob
+import gc
 from pdf2image import convert_from_path
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import ArchiveHandler, can_process_file, sort_files_by_priority
 from config import (
     MAX_FILE_SIZE, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, 
-    NSFW_THRESHOLD, FFMPEG_MAX_FRAMES, FFMPEG_TIMEOUT,ARCHIVE_EXTENSIONS
+    NSFW_THRESHOLD, FFMPEG_MAX_FRAMES, FFMPEG_TIMEOUT, ARCHIVE_EXTENSIONS
 )
 
 # 配置日志
@@ -208,9 +209,12 @@ class VideoProcessor:
     def _process_frame(self, frame_path):
         """处理单个帧"""
         try:
+            # 使用with语句确保Image对象正确关闭
             with Image.open(frame_path) as img:
                 result = process_image(img)
                 frame_num = int(Path(frame_path).stem.split('-')[1])
+                # 处理完单帧后进行垃圾回收
+                gc.collect()
                 return frame_num, result
         except Exception as e:
             logger.error(f"处理帧 {frame_path} 失败: {str(e)}")
@@ -237,6 +241,9 @@ class VideoProcessor:
                     if result['nsfw'] > NSFW_THRESHOLD:
                         logger.info(f"在帧 {frame_num} 发现匹配内容")
                         return result
+                
+                # 处理完一帧后释放内存
+                gc.collect()
             
             return last_result
             
@@ -252,6 +259,9 @@ class VideoProcessor:
                     logger.info("清理临时文件完成")
                 except Exception as e:
                     logger.error(f"清理临时文件失败: {str(e)}")
+            
+            # 强制垃圾回收
+            gc.collect()
 
 def process_image(image):
     """处理单张图片并返回检测结果"""
@@ -261,6 +271,18 @@ def process_image(image):
         nsfw_score = next((item['score'] for item in result if item['label'] == 'nsfw'), 0)
         normal_score = next((item['score'] for item in result if item['label'] == 'normal'), 1)
         logger.info(f"图片处理完成: NSFW={nsfw_score:.3f}, Normal={normal_score:.3f}")
+        
+        # 强制垃圾回收
+        gc.collect()
+        
+        # 如果使用PyTorch with CUDA，清理缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except (ImportError, AttributeError):
+            pass
+        
         return {
             'nsfw': nsfw_score,
             'normal': normal_score
@@ -280,29 +302,77 @@ def process_pdf_file(pdf_stream):
             tmp_pdf_path = tmp_pdf.name
 
         try:
-            # 使用 pdf2image 将 PDF 转换为图片
-            from pdf2image import convert_from_path
-            images = convert_from_path(
+            # 首先获取PDF页数，只加载第一页
+            first_page = convert_from_path(
                 tmp_pdf_path,
-                dpi=200,  # 设置较低的DPI以提高性能
-                fmt='jpeg',
-                thread_count=2  # 使用多线程提高性能
+                dpi=72,  # 低DPI只用于获取页数
+                first_page=1,
+                last_page=1
             )
             
-            logger.info(f"PDF共转换出 {len(images)} 页图片")
+            # 使用pdftoppm获取页数
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['pdfinfo', tmp_pdf_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                # 解析页数
+                page_count = 0
+                for line in result.stdout.splitlines():
+                    if line.startswith('Pages:'):
+                        try:
+                            page_count = int(line.split(':', 1)[1].strip())
+                        except ValueError:
+                            page_count = 1
+                        break
+                
+                if page_count == 0:
+                    page_count = 1  # 默认至少有1页
+            except Exception as e:
+                logger.warning(f"获取PDF页数失败，将使用默认处理方式: {str(e)}")
+                # 如果无法获取页数，使用默认的处理方式
+                page_count = 1
+                if first_page:
+                    page_count = len(first_page)
+                    
+            logger.info(f"PDF共有 {page_count} 页")
             
             last_result = None
             
-            # 处理每一页转换出的图片
-            for page_num, image in enumerate(images, 1):
+            # 一次只处理一页以减少内存使用
+            for page_num in range(1, page_count + 1):
                 try:
-                    logger.info(f"正在处理第 {page_num} 页")
-                    result = process_image(image)
-                    last_result = result
+                    logger.info(f"正在处理第 {page_num}/{page_count} 页")
                     
-                    if result['nsfw'] > NSFW_THRESHOLD:
-                        logger.info(f"在第 {page_num} 页发现匹配内容")
-                        return result
+                    # 只转换当前页
+                    page_images = convert_from_path(
+                        tmp_pdf_path,
+                        dpi=200,
+                        fmt='jpeg',
+                        thread_count=1,  # 减少线程数降低内存使用
+                        first_page=page_num,
+                        last_page=page_num
+                    )
+                    
+                    if not page_images:
+                        continue
+                        
+                    # 使用with语句确保图像被关闭
+                    with page_images[0] as image:
+                        result = process_image(image)
+                        last_result = result
+                        
+                        if result['nsfw'] > NSFW_THRESHOLD:
+                            logger.info(f"在第 {page_num} 页发现匹配内容")
+                            return result
+                    
+                    # 清理页面图像引用并强制垃圾回收
+                    page_images = None
+                    gc.collect()
                         
                 except Exception as e:
                     logger.error(f"处理PDF第 {page_num} 页时出错: {str(e)}")
@@ -317,6 +387,9 @@ def process_pdf_file(pdf_stream):
                 os.unlink(tmp_pdf_path)
             except Exception as e:
                 logger.error(f"清理临时PDF文件失败: {str(e)}")
+            
+            # 强制垃圾回收
+            gc.collect()
                 
     except Exception as e:
         logger.error(f"PDF处理失败: {str(e)}")
@@ -339,35 +412,45 @@ def process_doc_file(file_content):
                 timeout=300
             )
 
-            # 检查是否包含图片（使用 antiword 的图片提取模式）
+            # 创建临时目录提取图片
             img_dir = tempfile.mkdtemp()
-            subprocess.run(
-                ['antiword', '-i', '2', '-o', img_dir, tmp_file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=300
-            )
+            try:
+                # 检查是否包含图片（使用 antiword 的图片提取模式）
+                subprocess.run(
+                    ['antiword', '-i', '2', '-o', img_dir, tmp_file_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=300
+                )
 
-            # 检查提取的图片
-            last_result = None
-            for img_file in os.listdir(img_dir):
-                if img_file.endswith(('.png', '.jpg', '.jpeg')):
-                    img_path = os.path.join(img_dir, img_file)
-                    with Image.open(img_path) as img:
-                        result = process_image(img)
-                        last_result = result
-                        if result['nsfw'] > NSFW_THRESHOLD:
-                            return result
+                # 检查提取的图片
+                last_result = None
+                for img_file in os.listdir(img_dir):
+                    if img_file.endswith(('.png', '.jpg', '.jpeg')):
+                        img_path = os.path.join(img_dir, img_file)
+                        # 使用with语句确保图像被关闭
+                        with Image.open(img_path) as img:
+                            result = process_image(img)
+                            last_result = result
+                            if result['nsfw'] > NSFW_THRESHOLD:
+                                return result
+                        
+                        # 处理完一张图片后强制垃圾回收
+                        gc.collect()
 
-            return last_result
+                return last_result
+            finally:
+                # 清理临时图片目录
+                if os.path.exists(img_dir):
+                    shutil.rmtree(img_dir)
 
         finally:
             # 清理临时文件
             if os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
-            if os.path.exists(img_dir):
-                import shutil
-                shutil.rmtree(img_dir)
+            
+            # 强制垃圾回收
+            gc.collect()
 
     except Exception as e:
         logger.error(f"处理 DOC 文件失败: {str(e)}")
@@ -391,11 +474,15 @@ def process_docx_file(file_content):
                 if "image" in rel.target_ref:
                     try:
                         image_data = rel.target_part.blob
-                        img = Image.open(io.BytesIO(image_data))
-                        result = process_image(img)
-                        last_result = result
-                        if result['nsfw'] > NSFW_THRESHOLD:
-                            return result
+                        # 使用with语句确保图像被关闭
+                        with Image.open(io.BytesIO(image_data)) as img:
+                            result = process_image(img)
+                            last_result = result
+                            if result['nsfw'] > NSFW_THRESHOLD:
+                                return result
+                        
+                        # 处理完一张图片后强制垃圾回收
+                        gc.collect()
                     except Exception as img_error:
                         logger.error(f"处理 DOCX 中的图片失败: {str(img_error)}")
                         continue
@@ -406,6 +493,9 @@ def process_docx_file(file_content):
             # 清理临时文件
             if os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
+            
+            # 强制垃圾回收
+            gc.collect()
 
     except Exception as e:
         logger.error(f"处理 DOCX 文件失败: {str(e)}")
@@ -414,7 +504,10 @@ def process_docx_file(file_content):
 def process_video_file(video_path):
     """处理视频文件的入口函数"""
     processor = VideoProcessor(video_path)
-    return processor.process()
+    result = processor.process()
+    # 处理完视频后强制垃圾回收
+    gc.collect()
+    return result
 
 def process_archive(filepath, filename, depth=0, max_depth=100):
     """处理压缩文件，支持嵌套压缩包
@@ -494,16 +587,20 @@ def process_archive(filepath, filename, depth=0, max_depth=100):
                         ext = os.path.splitext(inner_filename)[1].lower()
                         
                         if ext in IMAGE_EXTENSIONS:
-                            img = Image.open(io.BytesIO(content))
-                            result = process_image(img)
-                            last_result = {
-                                'matched_file': inner_filename,
-                                'result': result
-                            }
+                            # 使用with语句确保图像被关闭
+                            with Image.open(io.BytesIO(content)) as img:
+                                result = process_image(img)
+                                last_result = {
+                                    'matched_file': inner_filename,
+                                    'result': result
+                                }
+                                
+                                if result['nsfw'] > NSFW_THRESHOLD:
+                                    matched_content = last_result
+                                    break
                             
-                            if result['nsfw'] > NSFW_THRESHOLD:
-                                matched_content = last_result
-                                break
+                            # 处理完一张图片后强制垃圾回收
+                            gc.collect()
                         
                         elif ext == '.pdf':
                             result = process_pdf_file(content)
@@ -515,6 +612,9 @@ def process_archive(filepath, filename, depth=0, max_depth=100):
                                 if result['nsfw'] > NSFW_THRESHOLD:
                                     matched_content = last_result
                                     break
+                            
+                            # 处理完PDF后强制垃圾回收
+                            gc.collect()
                         
                         elif ext in VIDEO_EXTENSIONS:
                             temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
@@ -534,6 +634,9 @@ def process_archive(filepath, filename, depth=0, max_depth=100):
                             finally:
                                 if os.path.exists(temp_video.name):
                                     os.unlink(temp_video.name)
+                                
+                                # 处理完视频后强制垃圾回收
+                                gc.collect()
                                     
                     except Exception as e:
                         logger.error(f"处理文件 {inner_filename} 时出错: {str(e)}")
@@ -575,6 +678,9 @@ def process_archive(filepath, filename, depth=0, max_depth=100):
                             return nested_result[0]
                     elif nested_result.get('status') == 'success':
                         return nested_result
+                    
+                    # 处理完一个嵌套压缩包后强制垃圾回收
+                    gc.collect()
                         
                 except Exception as e:
                     logger.error(f"处理嵌套压缩包 {nested_archive} 时出错: {str(e)}")
@@ -609,3 +715,6 @@ def process_archive(filepath, filename, depth=0, max_depth=100):
                 shutil.rmtree(temp_dir)
             except Exception as e:
                 logger.error(f"清理临时目录时出错: {str(e)}")
+        
+        # 强制垃圾回收
+        gc.collect()
