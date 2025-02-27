@@ -1,17 +1,18 @@
 # app.py
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, g
 import tempfile
 import os
 import shutil
 import logging
 import magic
+import gc
 from pathlib import Path
 from werkzeug.utils import secure_filename
 from config import MAX_FILE_SIZE, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MIME_TO_EXT, DOCUMENT_EXTENSIONS
 from utils import ArchiveHandler, can_process_file, sort_files_by_priority
 from processors import (
     process_image, process_pdf_file, process_video_file, 
-    process_archive, process_doc_file, process_docx_file  # 添加这两个函数的导入
+    process_archive, process_doc_file, process_docx_file
 )
 
 # 配置日志
@@ -33,6 +34,7 @@ class TempFileHandler:
     """临时文件管理器"""
     def __init__(self):
         self.temp_files = []
+        self.temp_dirs = []
         
     def create_temp_file(self, suffix=None):
         """创建临时文件"""
@@ -40,8 +42,15 @@ class TempFileHandler:
         self.temp_files.append(temp_file.name)
         return temp_file
         
+    def create_temp_dir(self):
+        """创建临时目录"""
+        temp_dir = tempfile.mkdtemp()
+        self.temp_dirs.append(temp_dir)
+        return temp_dir
+        
     def cleanup(self):
-        """清理所有临时文件"""
+        """清理所有临时文件和目录"""
+        # 清理文件
         for file_path in self.temp_files:
             try:
                 if os.path.exists(file_path):
@@ -49,6 +58,18 @@ class TempFileHandler:
             except Exception as e:
                 logger.error(f"清理临时文件失败 {file_path}: {str(e)}")
         self.temp_files.clear()
+        
+        # 清理目录
+        for dir_path in self.temp_dirs:
+            try:
+                if os.path.exists(dir_path):
+                    shutil.rmtree(dir_path)
+            except Exception as e:
+                logger.error(f"清理临时目录失败 {dir_path}: {str(e)}")
+        self.temp_dirs.clear()
+        
+        # 强制垃圾回收
+        gc.collect()
 
 def detect_file_type(file_path):
     """检测文件类型，使用文件的前2048字节"""
@@ -71,7 +92,6 @@ def detect_file_type(file_path):
         logger.error(f"文件类型检测失败: {str(e)}")
         raise
 
-# 在 app.py 文件中，找到 process_file_by_type 函数，修改如下：
 def process_file_by_type(file_path, detected_type, original_filename, temp_handler):
     """根据文件类型选择处理方法"""
     mime_type, ext = detected_type
@@ -81,7 +101,7 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
         original_ext = os.path.splitext(original_filename)[1].lower()
         if original_ext in IMAGE_EXTENSIONS or original_ext == '.pdf' or \
            original_ext in VIDEO_EXTENSIONS or original_ext in {'.rar', '.zip', '.7z', '.gz'} or \
-           original_ext in DOCUMENT_EXTENSIONS:  # 新增文档扩展名支持
+           original_ext in DOCUMENT_EXTENSIONS:
             ext = original_ext
     
     if not ext:
@@ -95,18 +115,23 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
         if ext in IMAGE_EXTENSIONS:
             with open(file_path, 'rb') as f:
                 from PIL import Image
-                image = Image.open(f)
-                result = process_image(image)
-                return {
-                    'status': 'success',
-                    'filename': original_filename,
-                    'result': result
-                }
+                # 使用with语句确保Image对象正确关闭
+                with Image.open(f) as image:
+                    result = process_image(image)
+                    # 处理完图片后强制垃圾回收
+                    gc.collect()
+                    return {
+                        'status': 'success',
+                        'filename': original_filename,
+                        'result': result
+                    }
                 
         elif ext == '.pdf':
             with open(file_path, 'rb') as f:
                 pdf_stream = f.read()
                 result = process_pdf_file(pdf_stream)
+                # 处理完PDF后强制垃圾回收
+                gc.collect()
                 if result:
                     return {
                         'status': 'success',
@@ -120,6 +145,8 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
                 
         elif ext in VIDEO_EXTENSIONS:
             result = process_video_file(file_path)
+            # 处理完视频后强制垃圾回收
+            gc.collect()
             if result:
                 return {
                     'status': 'success',
@@ -132,15 +159,21 @@ def process_file_by_type(file_path, detected_type, original_filename, temp_handl
             }, 400
                 
         elif ext in {'.zip', '.rar', '.7z', '.gz'}:
-            return process_archive(file_path, original_filename)
+            result = process_archive(file_path, original_filename)
+            # 处理完压缩包后强制垃圾回收
+            gc.collect()
+            return result
             
-        elif ext in DOCUMENT_EXTENSIONS:  # 新增对文档文件的处理
+        elif ext in DOCUMENT_EXTENSIONS:
             with open(file_path, 'rb') as f:
                 file_content = f.read()
                 if ext == '.doc':
                     result = process_doc_file(file_content)
                 else:  # .docx
                     result = process_docx_file(file_content)
+                
+                # 处理完文档后强制垃圾回收
+                gc.collect()
                     
                 if result:
                     return {
