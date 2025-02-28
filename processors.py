@@ -23,8 +23,58 @@ from config import (
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 初始化模型
-pipe = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=-1)
+# 模型管理器
+class ModelManager:
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = ModelManager()
+        return cls._instance
+    
+    def __init__(self):
+        self.pipe = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=-1)
+        self.usage_count = 0
+        self.reset_threshold = 10000  # 每处理1万张图片重置一次模型
+        logger.info("模型管理器初始化完成")
+    
+    def get_pipeline(self):
+        # 增加使用计数
+        self.usage_count += 1
+        
+        # 检查是否需要重置模型
+        if self.usage_count >= self.reset_threshold:
+            logger.info(f"模型已处理 {self.usage_count} 张图片，执行重置")
+            # 记录旧模型引用
+            old_pipe = self.pipe
+            
+            # 创建新模型
+            self.pipe = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=-1)
+            
+            # 删除旧模型
+            del old_pipe
+            
+            # 尝试清理PyTorch缓存
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except (ImportError, AttributeError):
+                pass
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+            # 重置计数器
+            self.usage_count = 0
+            
+            logger.info("模型重置完成")
+            
+        return self.pipe
+
+# 初始化模型管理器实例
+model_manager = ModelManager.get_instance()
 
 class VideoProcessor:
     def __init__(self, video_path):
@@ -267,6 +317,11 @@ def process_image(image):
     """处理单张图片并返回检测结果"""
     try:
         logger.info("开始处理图片")
+        
+        # 获取模型管理器的管道
+        pipe = model_manager.get_pipeline()
+        
+        # 使用管道处理图像
         result = pipe(image)
         nsfw_score = next((item['score'] for item in result if item['label'] == 'nsfw'), 0)
         normal_score = next((item['score'] for item in result if item['label'] == 'normal'), 1)
@@ -275,14 +330,6 @@ def process_image(image):
         # 强制垃圾回收
         gc.collect()
         
-        # 如果使用PyTorch with CUDA，清理缓存
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except (ImportError, AttributeError):
-            pass
-        
         return {
             'nsfw': nsfw_score,
             'normal': normal_score
@@ -290,7 +337,7 @@ def process_image(image):
     except Exception as e:
         logger.error(f"图片处理失败: {str(e)}")
         raise Exception(f"Image processing failed: {str(e)}")
-
+    
 def process_pdf_file(pdf_stream):
     """使用 pdf2image 处理 PDF 文件并检查内容"""
     try:
@@ -303,14 +350,30 @@ def process_pdf_file(pdf_stream):
 
         try:
             # 首先获取PDF页数，只加载第一页
-            first_page = convert_from_path(
-                tmp_pdf_path,
-                dpi=72,  # 低DPI只用于获取页数
-                first_page=1,
-                last_page=1
-            )
+            first_page = None
+            first_page_count = 0
+            try:
+                first_page = convert_from_path(
+                    tmp_pdf_path,
+                    dpi=72,  # 低DPI只用于获取页数
+                    first_page=1,
+                    last_page=1
+                )
+                if first_page:
+                    first_page_count = len(first_page)
+                    # 立即释放first_page资源
+                    for fp_img in first_page:
+                        try:
+                            if hasattr(fp_img, 'close') and callable(fp_img.close):
+                                fp_img.close()
+                        except Exception:
+                            pass
+                    del first_page
+                    gc.collect()
+            except Exception as e:
+                logger.warning(f"获取第一页失败: {str(e)}")
             
-            # 使用pdftoppm获取页数
+            # 使用pdfinfo获取页数
             try:
                 import subprocess
                 result = subprocess.run(
@@ -334,10 +397,8 @@ def process_pdf_file(pdf_stream):
                     page_count = 1  # 默认至少有1页
             except Exception as e:
                 logger.warning(f"获取PDF页数失败，将使用默认处理方式: {str(e)}")
-                # 如果无法获取页数，使用默认的处理方式
-                page_count = 1
-                if first_page:
-                    page_count = len(first_page)
+                # 如果无法获取页数，使用第一页的信息或默认值
+                page_count = first_page_count if first_page_count > 0 else 1
                     
             logger.info(f"PDF共有 {page_count} 页")
             
@@ -345,6 +406,7 @@ def process_pdf_file(pdf_stream):
             
             # 一次只处理一页以减少内存使用
             for page_num in range(1, page_count + 1):
+                page_images = None
                 try:
                     logger.info(f"正在处理第 {page_num}/{page_count} 页")
                     
@@ -361,22 +423,38 @@ def process_pdf_file(pdf_stream):
                     if not page_images:
                         continue
                         
-                    # 使用with语句确保图像被关闭
-                    with page_images[0] as image:
-                        result = process_image(image)
-                        last_result = result
-                        
-                        if result['nsfw'] > NSFW_THRESHOLD:
-                            logger.info(f"在第 {page_num} 页发现匹配内容")
-                            return result
-                    
-                    # 清理页面图像引用并强制垃圾回收
-                    page_images = None
-                    gc.collect()
-                        
+                    # 确保所有图像都被正确处理和关闭
+                    for idx, img in enumerate(page_images):
+                        try:
+                            with img:
+                                if idx == 0:  # 只处理第一张图片
+                                    result = process_image(img)
+                                    last_result = result
+                                    if result['nsfw'] > NSFW_THRESHOLD:
+                                        logger.info(f"在第 {page_num} 页发现匹配内容")
+                                        return result
+                        except Exception as img_err:
+                            logger.error(f"处理PDF第 {page_num} 页图像 {idx} 时出错: {str(img_err)}")
+                        finally:
+                            # 确保每张图片都被显式关闭
+                            if hasattr(img, 'close') and callable(img.close):
+                                try:
+                                    img.close()
+                                except Exception:
+                                    pass
+                                    
                 except Exception as e:
                     logger.error(f"处理PDF第 {page_num} 页时出错: {str(e)}")
-                    continue
+                finally:
+                    # 显式删除图像列表并强制垃圾回收
+                    if page_images is not None:
+                        for img in page_images:
+                            try:
+                                del img
+                            except Exception:
+                                pass
+                        del page_images
+                        gc.collect()
             
             logger.info("PDF处理完成")
             return last_result  # 返回最后一次处理结果
